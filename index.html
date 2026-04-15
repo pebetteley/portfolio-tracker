@@ -724,113 +724,77 @@ let isUpdating = false;
 // API - YAHOO FINANCE PROXY
 // ============================================
 
-async function fetchYahooPrice(symbol, retries = 3) {
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    try {
-      // Intentar con diferentes endpoints de Yahoo Finance
-      const urls = [
-        `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1mo`,
-        `https://query2.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1mo`
-      ];
-      
-      const url = urls[attempt % 2];
-      console.log(`Intento ${attempt}/${retries}: Fetching ${symbol} desde ${url}`);
-      
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          'Accept': 'application/json'
-        }
-      });
-      
-      if (!response.ok) {
-        console.warn(`HTTP ${response.status} para ${symbol}`);
-        if (attempt < retries) {
-          await new Promise(resolve => setTimeout(resolve, 1000 * attempt)); // Espera progresiva
-          continue;
-        }
-        throw new Error(`HTTP ${response.status}`);
-      }
-      
-      const data = await response.json();
-      
-      // Validar respuesta
-      if (!data.chart || !data.chart.result || data.chart.result.length === 0) {
-        throw new Error('Respuesta vacía de API');
-      }
-      
-      if (data.chart.error) {
-        throw new Error(`API Error: ${data.chart.error.description || 'Símbolo inválido'}`);
-      }
-      
-      const result = data.chart.result[0];
-      
-      // Validar datos críticos
-      if (!result.meta || !result.meta.regularMarketPrice) {
-        throw new Error('Datos de precio no disponibles');
-      }
-      
-      const currentPrice = result.meta.regularMarketPrice;
-      const previousClose = result.meta.previousClose || currentPrice;
-      const change = ((currentPrice - previousClose) / previousClose) * 100;
-      
-      // Obtener datos históricos para calcular indicadores
-      const timestamps = result.timestamp || [];
-      const quotes = result.indicators?.quote?.[0] || {};
-      const closes = (quotes.close || []).filter(c => c !== null);
-      const highs = (quotes.high || []).filter(h => h !== null);
-      const lows = (quotes.low || []).filter(l => l !== null);
-      
-      // Calcular indicadores solo si hay suficientes datos
-      let rsi = 50, macd = 0, ma50 = null, ma200 = null;
-      
-      if (closes.length >= 14) {
-        rsi = calculateRSI(closes, 14);
-      }
-      
-      if (closes.length >= 26) {
-        macd = calculateMACD(closes);
-      }
-      
-      if (closes.length >= 50) {
-        ma50 = calculateMA(closes, 50);
-      }
-      
-      if (closes.length >= 200) {
-        ma200 = calculateMA(closes, 200);
-      }
-      
-      // Guardar historial
-      const historicalData = timestamps.map((ts, i) => ({
-        date: new Date(ts * 1000).toISOString().split('T')[0],
-        price: quotes.close?.[i],
-        high: quotes.high?.[i],
-        low: quotes.low?.[i],
-        volume: quotes.volume?.[i]
-      })).filter(d => d.price !== null && d.price !== undefined);
-      
-      updateAPIStatus(true);
-      
-      console.log(`✓ Datos obtenidos para ${symbol}: $${currentPrice.toFixed(2)}, RSI: ${rsi.toFixed(1)}`);
-      
-      return {
-        price: currentPrice,
-        change: change,
-        rsi: rsi,
-        macd: macd,
-        ma50: ma50,
-        ma200: ma200,
-        volume: result.meta.regularMarketVolume || 0,
-        historical: historicalData
-      };
-      
-    } catch (error) {
-      console.error(`✗ Intento ${attempt}/${retries} falló para ${symbol}:`, error.message);
-      
-      if (attempt === retries) {
-        updateAPIStatus(false);
-        return null;
-      }
+async function fetchYahooPrice(symbol) {
+  try {
+    const corsProxy = 'https://api.allorigins.win/raw?url=';
+    const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1mo`;
+    const url = corsProxy + encodeURIComponent(yahooUrl);
+    
+    console.log(`Fetching ${symbol}...`);
+    
+    const response = await fetch(url);
+    if (!response.ok) throw new Error('API error');
+    
+    const data = await response.json();
+    
+    if (!data.chart || !data.chart.result || data.chart.result.length === 0) {
+      throw new Error('Símbolo no encontrado');
+    }
+    
+    if (data.chart.error) {
+      throw new Error(data.chart.error.description || 'Símbolo inválido');
+    }
+    
+    const result = data.chart.result[0];
+    
+    if (!result.meta || !result.meta.regularMarketPrice) {
+      throw new Error('Datos no disponibles');
+    }
+    
+    const currentPrice = result.meta.regularMarketPrice;
+    const previousClose = result.meta.previousClose || currentPrice;
+    const change = ((currentPrice - previousClose) / previousClose) * 100;
+    
+    const timestamps = result.timestamp || [];
+    const quotes = result.indicators?.quote?.[0] || {};
+    const closes = (quotes.close || []).filter(c => c !== null);
+    
+    let rsi = 50, macd = 0, ma50 = null, ma200 = null;
+    
+    if (closes.length >= 14) rsi = calculateRSI(closes, 14);
+    if (closes.length >= 26) macd = calculateMACD(closes);
+    if (closes.length >= 50) ma50 = calculateMA(closes, 50);
+    if (closes.length >= 200) ma200 = calculateMA(closes, 200);
+    
+    const historicalData = timestamps.map((ts, i) => ({
+      date: new Date(ts * 1000).toISOString().split('T')[0],
+      price: quotes.close[i],
+      high: quotes.high[i],
+      low: quotes.low[i],
+      volume: quotes.volume[i]
+    })).filter(d => d.price !== null);
+    
+    updateAPIStatus(true);
+    console.log(`✓ ${symbol} OK`);
+    
+    return {
+      price: currentPrice,
+      change: change,
+      rsi: rsi,
+      macd: macd,
+      ma50: ma50,
+      ma200: ma200,
+      volume: result.meta.regularMarketVolume || 0,
+      historical: historicalData
+    };
+    
+  } catch (error) {
+    console.error(`Error ${symbol}:`, error.message);
+    updateAPIStatus(false);
+    return null;
+  }
+}
+
       
       // Esperar antes del siguiente intento
       await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
